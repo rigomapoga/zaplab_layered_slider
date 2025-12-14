@@ -28,7 +28,7 @@
     
     ID:                 zaplab_layered_slider
     vendor:             zaplab
-    version:            1.0.0
+    version:            1.1.0
     name:               ZapLab Layered Slider
     description:        A layer-based slider component for creating custom knobs and sliders
     website:            https://github.com/zaplab-dev/layered-slider

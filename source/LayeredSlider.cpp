@@ -385,7 +385,12 @@ json LayeredSlider::saveToJson() const
     j["interval"] = interval_;
     j["value"] = value_;
     j["skewFactor"] = skewFactor_;
+    j["symmetricSkew"] = symmetricSkew_;
     j["bipolarMode"] = bipolarMode_;
+    
+    // Save double-click return value settings
+    j["hasDoubleClickReturnValue"] = hasDoubleClickReturnValue_;
+    j["doubleClickReturnValue"] = doubleClickReturnValue_;
     
     // Save style
     j["style"] = static_cast<int>(style_);
@@ -400,7 +405,10 @@ json LayeredSlider::saveToJson() const
         {"startAngle", rotaryParams_.startAngleRadians},
         {"endAngle", rotaryParams_.endAngleRadians},
         {"stopAtEnd", rotaryParams_.stopAtEnd},
-        {"sensitivity", rotaryParams_.sensitivity}
+        {"sensitivity", rotaryParams_.sensitivity},
+        {"velocityMode", rotaryParams_.velocityMode},
+        {"velocitySensitivity", rotaryParams_.velocitySensitivity},
+        {"dragMode", static_cast<int>(rotaryParams_.dragMode)}
     };
     
     // Save linear parameters
@@ -417,53 +425,227 @@ json LayeredSlider::saveToJson() const
     return j;
 }
 
-void LayeredSlider::loadFromJson(const json& j)
+bool LayeredSlider::loadFromJson(const json& j)
 {
-    // Load value properties
-    minimum_ = j.value("minimum", 0.0);
-    maximum_ = j.value("maximum", 1.0);
-    interval_ = j.value("interval", 0.0);
-    value_ = j.value("value", 0.5);
-    skewFactor_ = j.value("skewFactor", 1.0);
-    bipolarMode_ = j.value("bipolarMode", false);
-    
-    // Load style
-    style_ = static_cast<SliderStyle>(j.value("style", 0));
-    
-    // Load text properties
-    if (j.contains("textSuffix"))
-        textSuffix_ = j["textSuffix"].get<std::string>();
-    numDecimalPlaces_ = j.value("decimalPlaces", 2);
-    showValueText_ = j.value("showValueText", false);
-    
-    // Load rotary parameters
-    if (j.contains("rotaryParameters"))
+    try
     {
-        const auto& rotary = j["rotaryParameters"];
-        rotaryParams_.startAngleRadians = rotary.value("startAngle", juce::MathConstants<float>::pi * 1.2f);
-        rotaryParams_.endAngleRadians = rotary.value("endAngle", juce::MathConstants<float>::pi * 2.8f);
-        rotaryParams_.stopAtEnd = rotary.value("stopAtEnd", true);
-        rotaryParams_.sensitivity = rotary.value("sensitivity", 1.0);
+        // Load value properties into member variables first
+        double loadedMin = j.value("minimum", 0.0);
+        double loadedMax = j.value("maximum", 1.0);
+        double loadedInterval = j.value("interval", 0.0);
+        double loadedValue = j.value("value", 0.5);
+        double loadedSkew = j.value("skewFactor", 1.0);
+        bool loadedSymmetricSkew = j.value("symmetricSkew", false);
+        bipolarMode_ = j.value("bipolarMode", false);
+        
+        // Load double-click return value settings
+        bool hasDoubleClick = j.value("hasDoubleClickReturnValue", false);
+        double doubleClickValue = j.value("doubleClickReturnValue", loadedMin);
+        
+        // Load style
+        style_ = static_cast<SliderStyle>(j.value("style", 0));
+        
+        // Load text properties
+        if (j.contains("textSuffix"))
+            textSuffix_ = j["textSuffix"].get<std::string>();
+        numDecimalPlaces_ = j.value("decimalPlaces", 2);
+        showValueText_ = j.value("showValueText", false);
+        
+        // Load rotary parameters
+        if (j.contains("rotaryParameters"))
+        {
+            const auto& rotary = j["rotaryParameters"];
+            rotaryParams_.startAngleRadians = rotary.value("startAngle", juce::MathConstants<float>::pi * 1.2f);
+            rotaryParams_.endAngleRadians = rotary.value("endAngle", juce::MathConstants<float>::pi * 2.8f);
+            rotaryParams_.stopAtEnd = rotary.value("stopAtEnd", true);
+            rotaryParams_.sensitivity = rotary.value("sensitivity", 1.0);
+            rotaryParams_.velocityMode = rotary.value("velocityMode", false);
+            rotaryParams_.velocitySensitivity = rotary.value("velocitySensitivity", 0.1f);
+            rotaryParams_.dragMode = static_cast<RotaryDragMode>(
+                rotary.value("dragMode", static_cast<int>(RotaryDragMode::HorizontalVerticalDrag)));
+        }
+        
+        // Check for behavior section's sliderStyle and map to RotaryDragMode
+        // This handles .sliderdesign files that use juce::Slider::SliderStyle values
+        if (j.contains("behavior"))
+        {
+            const auto& behavior = j["behavior"];
+            if (behavior.contains("sliderStyle"))
+            {
+                int juceStyle = behavior.value("sliderStyle", 7);  // Default to RotaryHorizontalVerticalDrag
+                // Map juce::Slider::SliderStyle values to RotaryDragMode
+                // juce::Slider::Rotary = 4, RotaryHorizontalDrag = 5, RotaryVerticalDrag = 6, RotaryHorizontalVerticalDrag = 7
+                switch (juceStyle)
+                {
+                    case 4:  // juce::Slider::Rotary
+                        rotaryParams_.dragMode = RotaryDragMode::Circular;
+                        break;
+                    case 5:  // juce::Slider::RotaryHorizontalDrag
+                        rotaryParams_.dragMode = RotaryDragMode::HorizontalDrag;
+                        break;
+                    case 6:  // juce::Slider::RotaryVerticalDrag
+                        rotaryParams_.dragMode = RotaryDragMode::VerticalDrag;
+                        break;
+                    case 7:  // juce::Slider::RotaryHorizontalVerticalDrag
+                    default:
+                        rotaryParams_.dragMode = RotaryDragMode::HorizontalVerticalDrag;
+                        break;
+                }
+            }
+        }
+        
+        // Load linear parameters
+        if (j.contains("linearParameters"))
+        {
+            const auto& linear = j["linearParameters"];
+            linearParams_.horizontal = linear.value("horizontal", false);
+            linearParams_.thumbSize = linear.value("thumbSize", 20.0f);
+            linearParams_.showTrack = linear.value("showTrack", true);
+            linearParams_.showValueTrack = linear.value("showValueTrack", true);
+        }
+        
+        // Load layer stack BEFORE applying range (so TextLayers exist)
+        if (j.contains("layerStack"))
+        {
+            layerStack_.fromJson(j["layerStack"]);
+        }
+        
+        // Now apply settings using setter methods for proper initialization
+        // This ensures TextLayers get the range, value is constrained, etc.
+        setSkewFactor(loadedSkew, loadedSymmetricSkew);
+        setRange(loadedMin, loadedMax, loadedInterval);  // This also calls setValue
+        setValue(loadedValue, juce::dontSendNotification);
+        setDoubleClickReturnValue(hasDoubleClick, doubleClickValue);
+        
+        updateLayersForValue();
+        repaint();
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        DBG("LayeredSlider::loadFromJson failed: " << e.what());
+        return false;
+    }
+}
+
+bool LayeredSlider::loadPresetFile(const juce::File& file)
+{
+    if (!file.existsAsFile())
+    {
+        DBG("LayeredSlider: Preset file not found: " << file.getFullPathName());
+        return false;
     }
     
-    // Load linear parameters
-    if (j.contains("linearParameters"))
+    auto fileText = file.loadFileAsString();
+    if (fileText.isEmpty())
     {
-        const auto& linear = j["linearParameters"];
-        linearParams_.horizontal = linear.value("horizontal", false);
-        linearParams_.thumbSize = linear.value("thumbSize", 20.0f);
-        linearParams_.showTrack = linear.value("showTrack", true);
-        linearParams_.showValueTrack = linear.value("showValueTrack", true);
+        DBG("LayeredSlider: Failed to read preset file: " << file.getFullPathName());
+        return false;
     }
     
-    // Load layer stack
-    if (j.contains("layerStack"))
+    try
     {
-        layerStack_.fromJson(j["layerStack"]);
+        auto j = json::parse(fileText.toStdString());
+        loadFromJson(j);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        DBG("LayeredSlider: Failed to parse preset JSON: " << e.what());
+        return false;
+    }
+}
+
+bool LayeredSlider::loadPresetFile(const juce::String& filePath)
+{
+    return loadPresetFile(juce::File(filePath));
+}
+
+bool LayeredSlider::loadFromMemory(const juce::String& presetName)
+{
+#if JUCE_MODULE_AVAILABLE_juce_binary_data || defined(BinaryData)
+    // Convert preset name to valid BinaryData identifier
+    // Replace dots and other special chars with underscores
+    auto resourceName = presetName.replaceCharacters(".-/ ", "____");
+    
+    // Ensure .sliderdesign extension
+    if (!resourceName.endsWithIgnoreCase("_sliderdesign"))
+    {
+        if (resourceName.contains("_sliderdesign_"))
+            resourceName = resourceName.upToLastOccurrenceOf("_sliderdesign", true, false);
+        else
+            resourceName += "_sliderdesign";
     }
     
-    updateLayersForValue();
-    repaint();
+    // Try to find resource in BinaryData
+    int dataSize = 0;
+    const char* data = nullptr;
+    
+#ifdef BinaryData
+    // Use BinaryData reflection to find the resource
+    auto numResources = BinaryData::namedResourceListSize;
+    for (int i = 0; i < numResources; ++i)
+    {
+        auto name = juce::String(BinaryData::namedResourceList[i]);
+        if (name.equalsIgnoreCase(resourceName) || 
+            name.containsIgnoreCase(resourceName))
+        {
+            data = BinaryData::getNamedResource(name.toRawUTF8(), dataSize);
+            break;
+        }
+    }
+#endif
+    
+    if (data == nullptr || dataSize == 0)
+    {
+        DBG("LayeredSlider: Preset not found in BinaryData: " << resourceName);
+        return false;
+    }
+    
+    try
+    {
+        auto jsonText = juce::String::fromUTF8(data, dataSize);
+        auto j = json::parse(jsonText.toStdString());
+        loadFromJson(j);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        DBG("LayeredSlider: Failed to parse preset from memory: " << e.what());
+        return false;
+    }
+#else
+    juce::ignoreUnused(presetName);
+    DBG("LayeredSlider: loadFromMemory() requires BinaryData. Add preset files as binary resources.");
+    return false;
+#endif
+}
+
+bool LayeredSlider::loadFromBase64(const juce::String& base64EncodedJson)
+{
+    juce::MemoryOutputStream memOut;
+    
+    if (!juce::Base64::convertFromBase64(memOut, base64EncodedJson))
+    {
+        DBG("LayeredSlider: Failed to decode Base64 string");
+        return false;
+    }
+    
+    try
+    {
+        auto jsonText = juce::String::fromUTF8(
+            static_cast<const char*>(memOut.getData()), 
+            static_cast<int>(memOut.getDataSize())
+        );
+        auto j = json::parse(jsonText.toStdString());
+        loadFromJson(j);
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        DBG("LayeredSlider: Failed to parse JSON from Base64: " << e.what());
+        return false;
+    }
 }
 
 //==============================================================================
@@ -1409,24 +1591,64 @@ void LayeredSlider::sendValueChangedMessage(juce::NotificationType notification)
 
 void LayeredSlider::handleRotaryDrag(const juce::MouseEvent& e)
 {
-    const auto bounds = getLocalBounds().toFloat();
-    const float centerX = bounds.getCentreX();
-    const float centerY = bounds.getCentreY();
+    double valueDelta = 0.0;
+    const float pixelsForFullRange = static_cast<float>(getHeight()) * 2.0f;
     
-    // Calculate angle change
-    const float lastAngle = std::atan2(lastMousePos_.x - centerX, centerY - lastMousePos_.y);
-    const float currentAngle = std::atan2(e.position.x - centerX, centerY - e.position.y);
-    
-    float angleDelta = currentAngle - lastAngle;
-    
-    // Handle wrap-around
-    if (angleDelta > juce::MathConstants<float>::pi)
-        angleDelta -= juce::MathConstants<float>::twoPi;
-    else if (angleDelta < -juce::MathConstants<float>::pi)
-        angleDelta += juce::MathConstants<float>::twoPi;
-    
-    const float range = rotaryParams_.endAngleRadians - rotaryParams_.startAngleRadians;
-    const double valueDelta = (angleDelta / range) * (maximum_ - minimum_) * rotaryParams_.sensitivity;
+    switch (rotaryParams_.dragMode)
+    {
+        case RotaryDragMode::Circular:
+        {
+            // Original circular/angular drag mode
+            const auto bounds = getLocalBounds().toFloat();
+            const float centerX = bounds.getCentreX();
+            const float centerY = bounds.getCentreY();
+            
+            const float lastAngle = std::atan2(lastMousePos_.x - centerX, centerY - lastMousePos_.y);
+            const float currentAngle = std::atan2(e.position.x - centerX, centerY - e.position.y);
+            
+            float angleDelta = currentAngle - lastAngle;
+            
+            // Handle wrap-around
+            if (angleDelta > juce::MathConstants<float>::pi)
+                angleDelta -= juce::MathConstants<float>::twoPi;
+            else if (angleDelta < -juce::MathConstants<float>::pi)
+                angleDelta += juce::MathConstants<float>::twoPi;
+            
+            const float range = rotaryParams_.endAngleRadians - rotaryParams_.startAngleRadians;
+            valueDelta = (angleDelta / range) * (maximum_ - minimum_) * rotaryParams_.sensitivity;
+            break;
+        }
+        
+        case RotaryDragMode::HorizontalDrag:
+        {
+            // Drag left/right only
+            const float deltaX = e.position.x - lastMousePos_.x;
+            const double normalizedDelta = deltaX / pixelsForFullRange;
+            valueDelta = normalizedDelta * (maximum_ - minimum_) * rotaryParams_.sensitivity;
+            break;
+        }
+        
+        case RotaryDragMode::VerticalDrag:
+        {
+            // Drag up/down only (up = increase)
+            const float deltaY = lastMousePos_.y - e.position.y;
+            const double normalizedDelta = deltaY / pixelsForFullRange;
+            valueDelta = normalizedDelta * (maximum_ - minimum_) * rotaryParams_.sensitivity;
+            break;
+        }
+        
+        case RotaryDragMode::HorizontalVerticalDrag:
+        default:
+        {
+            // Drag in any direction (up or right = increase)
+            const float deltaX = e.position.x - lastMousePos_.x;
+            const float deltaY = lastMousePos_.y - e.position.y;
+            const float mouseDelta = deltaX + deltaY;
+            const double normalizedDelta = mouseDelta / pixelsForFullRange;
+            valueDelta = normalizedDelta * (maximum_ - minimum_) * rotaryParams_.sensitivity;
+            break;
+        }
+    }
     
     setValue(value_ + valueDelta);
 }

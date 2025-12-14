@@ -36,6 +36,18 @@ enum class SliderStyle
 
 //==============================================================================
 /**
+ * @brief Rotary drag mode - how mouse movement controls the knob
+ */
+enum class RotaryDragMode
+{
+    Circular,              // Move mouse in circle around knob (like juce::Slider::Rotary)
+    HorizontalDrag,        // Drag left/right (like juce::Slider::RotaryHorizontalDrag)
+    VerticalDrag,          // Drag up/down (like juce::Slider::RotaryVerticalDrag)
+    HorizontalVerticalDrag // Drag in any direction (like juce::Slider::RotaryHorizontalVerticalDrag)
+};
+
+//==============================================================================
+/**
  * @brief Configuration for rotary sliders
  */
 struct RotaryParameters
@@ -46,6 +58,7 @@ struct RotaryParameters
     float sensitivity { 1.0f };
     bool velocityMode { false };
     float velocitySensitivity { 0.1f };
+    RotaryDragMode dragMode { RotaryDragMode::HorizontalVerticalDrag };  // Default to HV drag
 };
 
 //==============================================================================
@@ -157,8 +170,14 @@ public:
     void loadFromValueTree(const juce::ValueTree& tree);
     [[nodiscard]] juce::ValueTree saveToValueTree() const;
     
-    void loadFromJson(const json& j);
+    bool loadFromJson(const json& j);
     [[nodiscard]] json saveToJson() const;
+    
+    // Convenience loading methods
+    bool loadPresetFile(const juce::File& file);
+    bool loadPresetFile(const juce::String& filePath);
+    bool loadFromMemory(const juce::String& presetName);
+    bool loadFromBase64(const juce::String& base64EncodedJson);
     
     // Built-in presets
     void applyRotaryKnobPreset();
