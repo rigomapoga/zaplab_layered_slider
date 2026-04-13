@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+Build/
+Builds/
+*.xcodeproj
+*.xcworkspace
+cmake-build-*/
+.vs/
+.vscode/
+*.user
+
+# macOS
+.DS_Store
+*.swp
+*~
+.AppleDouble
+.LSOverride
+
+# IDEs
+.idea/
+*.iml
+
+# Test files
+test/
